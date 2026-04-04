@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QRスキャナー</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+    h1 { font-size: 18px; margin-bottom: 16px; }
+    #reader {
+      width: 300px;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    #result-area {
+      margin-top: 20px;
+      width: 90%;
+      max-width: 400px;
+      text-align: center;
+    }
+    .result-card {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 12px;
+      display: none;
+    }
+    .result-card .emp-dept {
+      font-size: 14px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+    .result-card .emp-name {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 12px;
+    }
+    .status {
+      display: inline-block;
+      padding: 10px 32px;
+      border-radius: 24px;
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .status.success { background: #00C73C; color: #fff; }
+    .status.already { background: #1565c0; color: #fff; }
+    .status.error   { background: #c62828; color: #fff; }
+    .status.processing { background: #555; color: #fff; }
+    .counter {
+      width: 90%;
+      max-width: 400px;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 16px;
+    }
+    .counter-item {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 10px 20px;
+      text-align: center;
+    }
+    .counter-item .num {
+      font-size: 28px;
+      font-weight: bold;
+      color: #00C73C;
+    }
+    .counter-item .label {
+      font-size: 11px;
+      color: #888;
+      margin-top: 2px;
+    }
+    #log-area {
+      width: 90%;
+      max-width: 400px;
+      margin-top: 12px;
+    }
+    #log-area h2 {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    .log-list {
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .log-entry {
+      padding: 6px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .log-entry .time { color: #555; }
+    .log-entry .ok  { color: #00C73C; }
+    .log-entry .dup { color: #1565c0; }
+    .log-entry .ng  { color: #c62828; }
+    #manual-area {
+      margin-top: 16px;
+      width: 90%;
+      max-width: 400px;
+      text-align: center;
+    }
+    #manual-area input {
+      width: 60%;
+      font-size: 20px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 2px solid #444;
+      background: #0f3460;
+      color: #fff;
+      text-align: center;
+    }
+    #manual-area button {
+      font-size: 16px;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      background: #00C73C;
+      color: #fff;
+      cursor: pointer;
+      margin-left: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>受付スキャナー</h1>
+
+  <div class="counter">
+    <div class="counter-item">
+      <div class="num" id="countOk">0</div>
+      <div class="label">出席</div>
+    </div>
+    <div class="counter-item">
+      <div class="num" id="countDup" style="color:#1565c0;">0</div>
+      <div class="label">重複</div>
+    </div>
+    <div class="counter-item">
+      <div class="num" id="countNg" style="color:#c62828;">0</div>
+      <div class="label">エラー</div>
+    </div>
+  </div>
+
+  <div id="reader"></div>
+
+  <div id="result-area">
+    <div class="result-card" id="resultCard">
+      <div class="emp-dept" id="resDept"></div>
+      <div class="emp-name" id="resName"></div>
+      <div><span class="status" id="resStatus"></span></div>
+    </div>
+  </div>
+
+  <div id="manual-area">
+    <input type="tel" id="manualInput" placeholder="社員番号">
+    <button onclick="manualCheckIn()">手動受付</button>
+  </div>
+
+  <div id="log-area">
+    <h2>受付ログ</h2>
+    <div class="log-list" id="logList"></div>
+  </div>
+
+  <script>
+    // ★★★ ここにGASのWebアプリURLを設定 ★★★
+    var GAS_URL = 'https://script.google.com/macros/s/AKfycbz0cC5WkMw8q0WkEg1Uy6jop7ybs8Fwo5QlumlpasFgUjexVtqvyCiTQS06uEbr87SZ6g/exec';
+
+    var countOk = 0, countDup = 0, countNg = 0;
+    var isProcessing = false;
+    var lastScanned = '';
+    var lastTime = 0;
+
+    // html5-qrcode でカメラ起動
+    var html5QrcodeScanner = new Html5QrcodeScanner(
+      "reader", { fps: 10, qrbox: 200 }
+    );
+
+    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+
+    function onScanSuccess(decodedText) {
+      var now = Date.now();
+      if (isProcessing) return;
+      if (decodedText === lastScanned && now - lastTime < 5000) return;
+      lastScanned = decodedText;
+      lastTime = now;
+      doCheckIn(decodedText.trim());
+    }
+
+    function onScanFailure(error) {
+      // 読み取り失敗は無視（連続スキャン中）
+    }
+
+    function manualCheckIn() {
+      var input = document.getElementById('manualInput');
+      var val = input.value.trim();
+      if (!val) return;
+      doCheckIn(val);
+      input.value = '';
+    }
+
+    document.getElementById('manualInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') manualCheckIn();
+    });
+
+    function doCheckIn(empId) {
+      isProcessing = true;
+      showResult('', empId, '処理中...', 'processing');
+
+      // GASにリクエスト（JSONP風にGETリクエスト）
+      var url = GAS_URL + '?mode=api&action=checkin&empId=' + encodeURIComponent(empId) + '&callback=handleResponse&t=' + Date.now();
+
+      var script = document.createElement('script');
+      script.src = url;
+      script.onerror = function() {
+        showResult('', empId, '通信エラー', 'error');
+        addLog(empId, 'エラー', 'ng');
+        countNg++;
+        updateCounter();
+        isProcessing = false;
+      };
+      document.body.appendChild(script);
+
+      // 10秒タイムアウト
+      setTimeout(function() {
+        if (isProcessing) {
+          isProcessing = false;
+          showResult('', empId, 'タイムアウト', 'error');
+        }
+      }, 10000);
+    }
+
+    // GASからのコールバック
+    function handleResponse(result) {
+      isProcessing = false;
+      if (result.status === 'SUCCESS') {
+        showResult(result.dept, result.name, '出席登録 完了', 'success');
+        addLog(result.empId, result.name, 'ok');
+        countOk++;
+      } else if (result.status === 'ALREADY') {
+        showResult(result.dept, result.name, '登録済み', 'already');
+        addLog(result.empId, result.name, 'dup');
+        countDup++;
+      } else {
+        showResult('', '社員番号: ' + result.empId, '該当者なし', 'error');
+        addLog(result.empId, '---', 'ng');
+        countNg++;
+      }
+      updateCounter();
+    }
+
+    function showResult(dept, name, statusText, statusClass) {
+      document.getElementById('resultCard').style.display = 'block';
+      document.getElementById('resDept').textContent = dept;
+      document.getElementById('resName').textContent = name;
+      var el = document.getElementById('resStatus');
+      el.textContent = statusText;
+      el.className = 'status ' + statusClass;
+    }
+
+    function updateCounter() {
+      document.getElementById('countOk').textContent = countOk;
+      document.getElementById('countDup').textContent = countDup;
+      document.getElementById('countNg').textContent = countNg;
+    }
+
+    function addLog(empId, name, type) {
+      var log = document.getElementById('logList');
+      var now = new Date();
+      var time = ('0' + now.getHours()).slice(-2) + ':' + ('0' + now.getMinutes()).slice(-2) + ':' + ('0' + now.getSeconds()).slice(-2);
+      var cls = type === 'ok' ? 'ok' : type === 'dup' ? 'dup' : 'ng';
+      var label = type === 'ok' ? '出席' : type === 'dup' ? '済み' : 'NG';
+      log.innerHTML = '<div class="log-entry"><span class="time">' + time + '</span> '
+        + '<span class="' + cls + '">[' + label + ']</span> '
+        + empId + ' ' + name + '</div>' + log.innerHTML;
+    }
+  </script>
+
+</body>
+</html>
